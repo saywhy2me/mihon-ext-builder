@@ -63,6 +63,15 @@ _WEBTOON_SIGNALS = [
     "data-episode",
 ]
 
+# MangaNow.to-specific fingerprints (high confidence, checked before generic webtoon)
+_MANGANOW_SIGNALS = [
+    "manganow.to",
+    "class=\"anisc-detail\"",
+    "class=\"reading-item chapter-item\"",
+    "class=\"manga_list-sbs\"",
+    "class=\"anisc-poster\"",
+]
+
 _CLOUDFLARE_SIGNALS = [
     "cloudflare",
     "cf-ray",
@@ -112,6 +121,16 @@ def _detect_type(html: str, url: str, soup: BeautifulSoup) -> tuple[SiteType, li
         if "wp-content" in html_lower or "wp-json" in html_lower:
             features.append(DetectedFeature("WordPress confirmed", 0.95, "wp-content or wp-json present"))
         return SiteType.MADARA, features
+
+    # MangaNow.to — checked before generic manga reader / webtoon
+    manganow_hits = [sig for sig in _MANGANOW_SIGNALS if sig in html_lower or sig in url_lower]
+    if manganow_hits:
+        conf = min(0.7 + len(manganow_hits) * 0.1, 1.0)
+        features.append(DetectedFeature(
+            "MangaNow.to signals", conf,
+            f"Found: {', '.join(manganow_hits[:3])}"
+        ))
+        return SiteType.MANGANOW, features
 
     # Generic manga reader
     reader_hits = [sig for sig in _MANGA_READER_SIGNALS if sig in html_lower]
@@ -169,6 +188,7 @@ _TEMPLATE_MAP = {
     SiteType.COMICK:       "comick",
     SiteType.MANGA_READER: "manga_reader",
     SiteType.WEBTOON:      "webtoon",
+    SiteType.MANGANOW:     "manganow",
     SiteType.CUSTOM:       "http_source",
     SiteType.UNKNOWN:      "http_source",
 }

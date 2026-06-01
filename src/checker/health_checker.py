@@ -166,9 +166,40 @@ _GENERIC_SELECTORS = {
 }
 
 
+# Selector profiles verified against live manganow.to (2026-05-31)
+_MANGANOW_SELECTORS = {
+    "homepage": [
+        ("Manga cards (listing pages)",  "div.item.item-spc"),
+        ("Manga link",                   "div.item.item-spc a[href*='/manga/']"),
+        ("Cover image",                  "div.item.item-spc img[src]"),
+        ("Manga title from alt",         "div.item.item-spc img[alt]"),
+    ],
+    "manga_detail": [
+        ("Title (h2)",                   "h2.manga-name"),
+        ("Alt title",                    "div.manga-name-or"),
+        ("Cover image",                  "div.anisc-poster img, div.manga-poster img"),
+        ("Description",                  "div.anisc-detail div.description"),
+        ("Genres",                       "div.anisc-detail div.genres a"),
+        ("Status",                       "div.anisc-info div.item.item-title span.name"),
+        ("Chapter list container",       "div.tab-pane.active.show"),
+        ("Chapter items",                "li.item.reading-item.chapter-item"),
+        ("Chapter link",                 "li.item.reading-item.chapter-item a[href*='/manga/']"),
+    ],
+    "chapter_page": [
+        # Images are JS-rendered on manganow.to — these selectors will show EMPTY
+        # unless the extension parses the embedded JS data (see template notes)
+        ("Reading container",            "div.page-layout.page-read"),
+        ("Chapter nav prev",             "a.prev_chapter, a[href*='chapter-'][rel='prev']"),
+        ("Chapter nav next",             "a.next_chapter, a[href*='chapter-'][rel='next']"),
+    ],
+}
+
+
 def _get_selectors(site_type: str) -> dict:
     if site_type == "madara":
         return _MADARA_SELECTORS
+    if site_type == "manganow":
+        return _MANGANOW_SELECTORS
     return _GENERIC_SELECTORS
 
 

@@ -9,6 +9,7 @@ class SiteType(Enum):
     COMICK = "comick"               # ComicK API
     MANGA_READER = "manga_reader"   # Generic manga reader CMSes
     WEBTOON = "webtoon"             # Webtoon-style vertical strip
+    MANGANOW = "manganow"           # MangaNow.to custom CMS
     CUSTOM = "custom"               # Unique structure — needs manual work
     UNKNOWN = "unknown"             # Could not determine
 
