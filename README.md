@@ -53,7 +53,77 @@ pip install -r requirements.txt
 
 ---
 
-## Usage
+## Usage (CLI)
+
+The fastest way to use the tool is the `main.py` command-line interface. It exposes three commands — `analyze`, `scaffold`, and `check`.
+
+```bash
+python main.py --help          # list commands
+python main.py COMMAND --help  # flags for a specific command
+```
+
+### `analyze` — fingerprint a site
+
+```bash
+python main.py analyze https://manganow.to
+```
+
+```
+  Name       : MangaNow
+  Type       : manganow
+  Health     : alive
+  Confidence : 80%
+  Template   : manganow
+  Cloudflare : yes
+  Response   : 619ms
+```
+
+| Flag | Description |
+|---|---|
+| `--json` | Emit the result as JSON instead of the formatted report. |
+
+Exits non-zero if the site is detected as **dead**.
+
+### `scaffold` — generate an extension project
+
+```bash
+python main.py scaffold https://manganow.to -o generated
+```
+
+| Flag | Description |
+|---|---|
+| `-o, --output DIR` | Parent directory for the generated project (default `generated`). |
+| `--lang CODE` | Language code override (e.g. `en`, `ja`, `zh`). Auto-detected otherwise. |
+| `--class-name NAME` | Override the generated Kotlin class name. |
+| `--nsfw` | Mark the extension NSFW in `build.gradle`. |
+| `--version-code N` | Initial `extVersionCode` (default `1`). |
+| `--skip-analyze` | Skip live analysis and use the generic `http_source` template (offline). |
+
+### `check` — health-check a live extension
+
+```bash
+# full check (manga + chapter pages)
+python main.py check https://manganow.to \
+  -m /manga/noblesse \
+  -c /manga/noblesse/chapter-1
+
+# homepage-only quick check
+python main.py check https://manganow.to --quick
+```
+
+| Flag | Description |
+|---|---|
+| `-m, --manga PATH` | Path to a manga detail page (e.g. `/manga/noblesse`). |
+| `-c, --chapter PATH` | Path to a chapter page. |
+| `--site-type TYPE` | Force a selector profile (`madara`, `manganow`, …). Auto-detected otherwise. |
+| `-o, --output FILE` | Save the plain-text report to a file. |
+| `--quick` | Homepage-only check (no `--manga`/`--chapter` needed). |
+
+Exits non-zero when one or more selectors fail, so it works in CI.
+
+---
+
+## Usage (Python API)
 
 ### 1. Analyze a site
 
@@ -187,6 +257,7 @@ If the image pattern changes, inspect the chapter page source and update the reg
 
 ```
 mihon-ext-builder/
+├── main.py                            # CLI entry point (analyze / scaffold / check)
 ├── requirements.txt
 ├── src/
 │   ├── analyzer/
@@ -252,9 +323,9 @@ See [PROGRESS.md](PROGRESS.md) for the detailed development log.
 - [x] Template library — Madara, HttpSource, Webtoon, MangaDex, MangaNow.to
 - [x] Health checker — per-selector OK/EMPTY/BROKEN reports with fix hints
 - [x] MangaNow.to full compatibility (live-verified selectors + JS image fallback)
+- [x] CLI entry point (`main.py`) — `analyze`, `scaffold`, `check` commands with flags
 
 ### Next Up
-- [ ] CLI entry point (`main.py`) — `analyze`, `scaffold`, `check` commands with flags
 - [ ] Bulk health scan — check a list of extension URLs from a JSON/CSV manifest
 - [ ] Additional site profiles — add selector profiles for popular sites (e.g. MangaKakalot, MangaSee)
 - [ ] Update assistant — diff current selectors against live site and suggest which lines to change
