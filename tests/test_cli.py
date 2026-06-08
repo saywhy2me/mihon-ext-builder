@@ -142,6 +142,50 @@ def test_check_site_type_override():
     mock_qc.assert_called_once_with("https://test.com", site_type="manganow")
 
 
+# ── wizard ──────────────────────────────────────────────────────────────────
+
+def test_wizard_full_flow_generates_extension():
+    """URL -> analyze -> generate -> skip health check -> next steps."""
+    info = _mock_site_info(site_type=SiteType.MANGANOW)
+    with patch("main.analyze", return_value=info):
+        with tempfile.TemporaryDirectory() as tmp:
+            # answers: generate? y | output folder | nsfw? n | health check? n
+            result = runner.invoke(cli, ["wizard"],
+                                   input=f"test.com\ny\n{tmp}\nn\nn\n")
+    assert result.exit_code == 0
+    assert "Wizard" in result.output
+    assert "Extension generated" in result.output
+    assert "Next steps" in result.output
+
+
+def test_wizard_bare_invocation_launches_wizard():
+    """Running with no command should invoke the wizard, then decline to generate."""
+    with patch("main.analyze", return_value=_mock_site_info()):
+        result = runner.invoke(cli, [], input="test.com\nn\n")
+    assert result.exit_code == 0
+    assert "Wizard" in result.output
+    assert "No project generated" in result.output
+
+
+def test_wizard_normalizes_bare_domain():
+    """A bare domain should be analyzed as https://."""
+    with patch("main.analyze", return_value=_mock_site_info()) as mock_an:
+        runner.invoke(cli, ["wizard"], input="example.com\nn\n")
+    mock_an.assert_called_once_with("https://example.com")
+
+
+def test_wizard_survives_analyze_failure():
+    """If analyze raises, the wizard offers a generic-template fallback."""
+    with patch("main.analyze", side_effect=RuntimeError("network down")):
+        with tempfile.TemporaryDirectory() as tmp:
+            # fallback? y | generate? y | output | nsfw? n | health? n
+            result = runner.invoke(cli, ["wizard"],
+                                   input=f"test.com\ny\ny\n{tmp}\nn\nn\n")
+    assert result.exit_code == 0
+    assert "Could not analyze" in result.output
+    assert "Extension generated" in result.output
+
+
 if __name__ == "__main__":
     tests = [
         test_analyze_basic_output,
@@ -154,6 +198,10 @@ if __name__ == "__main__":
         test_check_unhealthy_exits_1,
         test_check_saves_output_file,
         test_check_site_type_override,
+        test_wizard_full_flow_generates_extension,
+        test_wizard_bare_invocation_launches_wizard,
+        test_wizard_normalizes_bare_domain,
+        test_wizard_survives_analyze_failure,
     ]
     passed = 0
     for t in tests:

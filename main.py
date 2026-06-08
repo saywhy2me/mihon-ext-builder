@@ -12,15 +12,29 @@ from pathlib import Path
 
 import click
 
+# Ensure Unicode in tool output renders on every console (Windows cp1252 would
+# otherwise crash on em-dashes / box characters). Safe no-op where unsupported.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+
 from src.analyzer.site_analyzer import analyze
 from src.checker.health_checker import check_extension, quick_check
 from src.models.site_info import HealthStatus, SiteType
 from src.scaffolder.scaffolder import scaffold
 
 
-@click.group()
-def cli():
-    """Mihon Extension Builder — analyze, scaffold, and health-check manga source extensions."""
+@click.group(invoke_without_command=True)
+@click.pass_context
+def cli(ctx):
+    """Mihon Extension Builder — analyze, scaffold, and health-check manga source extensions.
+
+    Run with no command to launch the interactive wizard.
+    """
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(wizard_cmd)
 
 
 # ── analyze ───────────────────────────────────────────────────────────────────
@@ -183,6 +197,122 @@ def check_cmd(url, manga, chapter, site_type, output, quick):
         sys.exit(1)
     else:
         click.secho("\nAll selectors passing.", fg="green", bold=True)
+
+
+# ── wizard ────────────────────────────────────────────────────────────────────
+
+def _normalize_url(raw: str) -> str:
+    """Add https:// if the user typed a bare domain, and strip stray whitespace."""
+    raw = raw.strip().strip("\"'")
+    if raw and not raw.startswith(("http://", "https://")):
+        raw = "https://" + raw
+    return raw
+
+
+@cli.command("wizard")
+def wizard_cmd():
+    """Interactive step-by-step guide: paste a URL, get a ready-to-build extension."""
+    click.echo()
+    click.secho("  ==================================================", fg="cyan")
+    click.secho("           Mihon Extension Builder - Wizard", fg="cyan", bold=True)
+    click.secho("  ==================================================", fg="cyan")
+    click.echo()
+    click.echo("  Paste a manga website URL and this wizard will fingerprint it,")
+    click.echo("  generate a Kotlin/Gradle extension project, and (optionally)")
+    click.echo("  test the selectors against the live site.")
+    click.echo()
+
+    # 1. Get + analyze the URL ----------------------------------------------------
+    url = _normalize_url(click.prompt(click.style("  Manga site URL", bold=True)))
+
+    click.echo()
+    click.echo(f"  Analyzing {url} ...")
+    try:
+        info = analyze(url)
+    except Exception as exc:  # network / parse failure — keep the wizard alive
+        click.secho(f"  Could not analyze the site: {exc}", fg="red")
+        if not click.confirm(click.style("  Continue with a generic template anyway?", fg="yellow"),
+                              default=True):
+            click.echo("  Cancelled.")
+            return
+        from src.models.site_info import SiteInfo as _SI
+        info = _SI(url=url, site_type=SiteType.UNKNOWN, health=HealthStatus.ALIVE,
+                   base_url=url, recommended_template="http_source")
+
+    health_colour = {
+        HealthStatus.ALIVE: "green",
+        HealthStatus.DEGRADED: "yellow",
+        HealthStatus.DEAD: "red",
+        HealthStatus.CLOUDFLARE_BLOCKED: "red",
+        HealthStatus.RATE_LIMITED: "yellow",
+    }.get(info.health, "white")
+
+    click.echo()
+    click.secho(f"    Detected type : {info.site_type.value}", fg="cyan", bold=True)
+    click.secho(f"    Health        : {info.health.value}", fg=health_colour, bold=True)
+    click.echo(f"    Confidence    : {info.confidence:.0%}")
+    click.echo(f"    Template      : {info.recommended_template or 'http_source'}")
+    if info.has_cloudflare:
+        click.secho("    Cloudflare    : yes - an interceptor will be wired in", fg="yellow")
+    click.echo()
+
+    if info.health == HealthStatus.DEAD:
+        click.secho("  This site looks dead/unreachable. Generating may not be useful.", fg="red")
+        if not click.confirm("  Generate the extension anyway?", default=False):
+            click.echo("  Cancelled.")
+            return
+
+    # 2. Generate the extension project ------------------------------------------
+    if not click.confirm(click.style("  Generate the extension project now?", bold=True),
+                         default=True):
+        click.echo("  No project generated. You can re-run the wizard any time.")
+        return
+
+    output = click.prompt("  Output folder", default="generated", show_default=True)
+    nsfw = click.confirm("  Mark this extension as NSFW (adult content)?", default=False)
+
+    click.echo()
+    click.echo("  Generating ...")
+    result = scaffold(info, output_root=output, nsfw=nsfw, version_code=1)
+
+    click.echo()
+    click.secho(f"  [OK] Extension generated: {result.output_dir}", fg="green", bold=True)
+    click.echo(f"    Extension ID : {result.ext_id}")
+    click.echo(f"    Class name   : {result.class_name}")
+    click.echo(f"    Files        : {len(result.files_created)} created")
+    if result.warnings:
+        click.echo()
+        click.secho("    Warnings:", fg="yellow")
+        for w in result.warnings:
+            click.secho(f"      ! {w}", fg="yellow")
+
+    # 3. Optional health check ----------------------------------------------------
+    click.echo()
+    if click.confirm("  Test the generated selectors against the live site now?",
+                     default=(info.health == HealthStatus.ALIVE)):
+        profile = info.recommended_template or "generic"
+        click.echo()
+        click.echo(f"  Running homepage check with '{profile}' profile ...")
+        try:
+            report = quick_check(url, site_type=profile)
+            click.echo()
+            click.echo(report.format())
+            if report.is_healthy:
+                click.secho("  All checked selectors are passing.", fg="green", bold=True)
+            else:
+                click.secho(f"  {report.total_broken} selector(s) need attention — "
+                            "see the hints above.", fg="yellow")
+        except Exception as exc:
+            click.secho(f"  Health check skipped (could not run): {exc}", fg="yellow")
+
+    # 4. Next steps ---------------------------------------------------------------
+    click.echo()
+    click.secho("  Next steps", bold=True, underline=True)
+    click.echo(f"    1. Open the generated project:  {result.output_dir}")
+    click.echo("    2. Read SETUP.md inside it for build + install instructions.")
+    click.echo("    3. Build the APK with Gradle, then install it in Mihon.")
+    click.echo()
+    click.secho("  Done. Happy reading!", fg="cyan", bold=True)
 
 
 # ── entry point ───────────────────────────────────────────────────────────────

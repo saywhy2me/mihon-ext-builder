@@ -41,7 +41,47 @@ Finding the broken selector and knowing what to replace it with currently requir
 
 ---
 
-## Installation
+## Quick Start (easiest)
+
+**You only need [Python 3.11+](https://www.python.org/downloads/) installed.** Download this project, then:
+
+| Your computer | What to do |
+|---|---|
+| **Windows** | Double-click **`run.bat`** |
+| **macOS / Linux** | Run **`./run.sh`** in a terminal (`chmod +x run.sh` the first time) |
+
+The launcher sets up everything automatically on first run (it creates an isolated environment and installs dependencies — no `pip` commands to type), then opens an **interactive wizard**:
+
+```
+  ==================================================
+           Mihon Extension Builder - Wizard
+  ==================================================
+
+  Manga site URL: manganow.to
+
+    Detected type : manganow
+    Health        : alive
+    Confidence    : 80%
+    Template      : manganow
+
+  Generate the extension project now? [Y/n]: y
+  Output folder [generated]:
+  Mark this extension as NSFW (adult content)? [y/N]: n
+
+  [OK] Extension generated: generated\en.manganow
+```
+
+Just paste a website URL and answer a few questions — the wizard fingerprints the
+site, generates the extension project, and (optionally) tests its selectors live.
+When it finishes, open the generated folder and follow its **`SETUP.md`** to build
+the installable APK.
+
+> You can launch the wizard manually any time with `python main.py` (no arguments)
+> or `python main.py wizard`.
+
+---
+
+## Manual Installation (advanced)
 
 ```bash
 git clone https://github.com/saywhy2me/mihon-ext-builder.git
@@ -55,7 +95,7 @@ pip install -r requirements.txt
 
 ## Usage (CLI)
 
-The fastest way to use the tool is the `main.py` command-line interface. It exposes three commands — `analyze`, `scaffold`, and `check`.
+Beyond the wizard, the `main.py` command-line interface exposes three commands for scripting — `analyze`, `scaffold`, and `check`.
 
 ```bash
 python main.py --help          # list commands
