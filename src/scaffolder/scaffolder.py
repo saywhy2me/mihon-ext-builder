@@ -125,26 +125,38 @@ def _network_security_config(base_url: str) -> Optional[str]:
 
 def _setup_instructions(site_info: SiteInfo, class_name: str, pkg_suffix: str,
                          output_dir: Path) -> str:
+    lang = site_info.language or "en"
+    pkg = pkg_suffix.split('.')[-1]
     return textwrap.dedent(f"""\
         # Setup Instructions for {site_info.name or site_info.url}
 
-        ## 1. Get the mihon-extensions repository
+        ## Easiest: build the APK on GitHub (no local tools)
+        If this project lives in the mihon-ext-builder repository on GitHub:
+        open the **Actions** tab, pick **"Build Extension APK"**, click
+        **Run workflow**, paste the site URL, and download the finished APK
+        from the run's **Artifacts** when it completes.
+
+        ---
+
+        ## Build it yourself
+
+        ### 1. Get the extensions-source repository
         ```
-        git clone https://github.com/mihonapp/extensions-source.git
+        git clone https://github.com/keiyoushi/extensions-source.git
         cd extensions-source
         ```
 
-        ## 2. Copy this extension into the repo
+        ### 2. Copy this extension into the repo
         ```
-        cp -r "{output_dir}" src/{site_info.language or "en"}/{pkg_suffix.split('.')[-1]}/
+        cp -r "{output_dir}" src/{lang}/{pkg}/
         ```
 
-        ## 3. Build the APK
+        ### 3. Build the APK
         ```
-        ./gradlew :{pkg_suffix.replace('.', ':')}:assembleDebug
+        ./gradlew src:{lang}:{pkg}:assembleDebug
         ```
         The APK will be at:
-        `src/{site_info.language or "en"}/{pkg_suffix.split('.')[-1]}/build/outputs/apk/debug/`
+        `src/{lang}/{pkg}/build/outputs/apk/debug/`
 
         ## 4. Install on device
         ```

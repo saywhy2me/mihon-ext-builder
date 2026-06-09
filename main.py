@@ -112,27 +112,49 @@ def analyze_cmd(url: str, as_json: bool):
               help="Initial extVersionCode for the APK.")
 @click.option("--skip-analyze", is_flag=True, default=False,
               help="Skip live analysis; use http_source template (faster, offline).")
-def scaffold_cmd(url, output, lang, class_name, nsfw, version_code, skip_analyze):
+@click.option("--json", "as_json", is_flag=True, default=False,
+              help="Emit only a machine-readable JSON summary (for CI / scripting).")
+def scaffold_cmd(url, output, lang, class_name, nsfw, version_code, skip_analyze, as_json):
     """Analyze a URL and generate a complete Kotlin/Gradle Mihon extension project."""
     if skip_analyze:
         from src.models.site_info import SiteInfo as _SI
         info = _SI(url=url, site_type=SiteType.UNKNOWN, health=HealthStatus.ALIVE,
                    base_url=url, recommended_template="http_source")
-        click.secho("Skipping analysis — using http_source template.", fg="yellow")
+        if not as_json:
+            click.secho("Skipping analysis — using http_source template.", fg="yellow")
     else:
-        click.echo(f"Analyzing: {url}")
+        if not as_json:
+            click.echo(f"Analyzing: {url}")
         info = analyze(url)
-        health_col = "green" if info.health == HealthStatus.ALIVE else "red"
-        click.secho(f"  Detected  : {info.site_type.value} ({info.health.value})",
-                    fg=health_col)
-        click.echo(f"  Template  : {info.recommended_template}")
-        if info.has_cloudflare:
-            click.secho("  Cloudflare: yes — CloudflareInterceptor will be wired in", fg="yellow")
+        if not as_json:
+            health_col = "green" if info.health == HealthStatus.ALIVE else "red"
+            click.secho(f"  Detected  : {info.site_type.value} ({info.health.value})",
+                        fg=health_col)
+            click.echo(f"  Template  : {info.recommended_template}")
+            if info.has_cloudflare:
+                click.secho("  Cloudflare: yes — CloudflareInterceptor will be wired in",
+                            fg="yellow")
 
-    click.echo()
     result = scaffold(info, output_root=output, nsfw=nsfw, version_code=version_code,
                       override_class_name=class_name, override_lang=lang)
 
+    if as_json:
+        # lang lives in the ext_id: eu.kanade.tachiyomi.extension.<lang>.<pkg>
+        resolved_lang = result.ext_id.split(".")[-2]
+        data = {
+            "output_dir": str(result.output_dir),
+            "lang": resolved_lang,
+            "package_name": result.package_name,
+            "class_name": result.class_name,
+            "ext_id": result.ext_id,
+            "template": info.recommended_template or "http_source",
+            "gradle_module": f"src:{resolved_lang}:{result.package_name}",
+            "warnings": result.warnings,
+        }
+        click.echo(json.dumps(data, indent=2))
+        return
+
+    click.echo()
     click.secho(f"Extension generated: {result.output_dir}", fg="green", bold=True)
     click.echo(f"  Extension ID : {result.ext_id}")
     click.echo(f"  Class name   : {result.class_name}")

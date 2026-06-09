@@ -1,0 +1,143 @@
+name: Build Extension APK
+
+# One-click APK builder for non-technical users:
+#   GitHub repo -> Actions tab -> "Build Extension APK" -> Run workflow ->
+#   paste a manga site URL -> download the APK from the run's Artifacts.
+#
+# No local setup, no Android Studio. The job scaffolds the extension with the
+# Python tool, drops it into the keiyoushi/extensions-source build, compiles a
+# debug-signed APK, and uploads it as a downloadable artifact.
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "Manga site URL (e.g. https://manganow.to)"
+        required: true
+        type: string
+      lang:
+        description: "Language code override (optional, e.g. en, ja, zh)"
+        required: false
+        type: string
+        default: ""
+      nsfw:
+        description: "Mark extension as NSFW (adult content)"
+        required: false
+        type: boolean
+        default: false
+      class_name:
+        description: "Kotlin class name override (optional)"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+# The upstream build that turns the generated project into an APK.
+env:
+  EXTENSIONS_SOURCE_REPO: https://github.com/keiyoushi/extensions-source.git
+
+jobs:
+  build:
+    name: Scaffold and build APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout mihon-ext-builder
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Scaffold extension project
+        id: scaffold
+        run: |
+          set -euo pipefail
+          ARGS=(scaffold "${{ inputs.url }}" --output generated --json)
+          [ -n "${{ inputs.lang }}" ]       && ARGS+=(--lang "${{ inputs.lang }}")
+          [ "${{ inputs.nsfw }}" = "true" ] && ARGS+=(--nsfw)
+          [ -n "${{ inputs.class_name }}" ] && ARGS+=(--class-name "${{ inputs.class_name }}")
+
+          python main.py "${ARGS[@]}" | tee scaffold.json
+          echo "----"
+          # Promote the JSON fields we need into step outputs.
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          d = json.load(open("scaffold.json"))
+          for k in ("output_dir", "lang", "package_name", "class_name",
+                    "ext_id", "gradle_module"):
+              print(f"{k}={d[k]}")
+          PY
+
+      - name: Show scaffold warnings
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, os
+          try:
+              d = json.load(open("scaffold.json"))
+          except Exception:
+              raise SystemExit(0)
+          warnings = d.get("warnings") or []
+          if warnings:
+              print("::group::Scaffold warnings")
+              for w in warnings:
+                  print(f"::warning::{w}")
+              print("::endgroup::")
+          # An unknown/custom template ships with TODO selectors that will not
+          # compile until filled in. Surface that loudly.
+          if "todo" in " ".join(warnings).lower() or "unknown" in d.get("ext_id", "").lower():
+              print("::warning::This template may contain TODO placeholders that "
+                    "must be completed before it compiles.")
+          PY
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: temurin
+
+      - name: Clone extensions-source build
+        run: git clone --depth 1 "$EXTENSIONS_SOURCE_REPO" ext-src
+
+      - name: Place generated extension into the build
+        run: |
+          set -euo pipefail
+          DEST="ext-src/src/${{ steps.scaffold.outputs.lang }}/${{ steps.scaffold.outputs.package_name }}"
+          mkdir -p "$DEST"
+          cp -r "${{ steps.scaffold.outputs.output_dir }}/." "$DEST/"
+          echo "Extension placed at: $DEST"
+          echo "::group::Extension contents"
+          find "$DEST" -type f
+          echo "::endgroup::"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build APK (assembleDebug)
+        working-directory: ext-src
+        run: ./gradlew ${{ steps.scaffold.outputs.gradle_module }}:assembleDebug --stacktrace
+
+      - name: Collect built APK(s)
+        id: collect
+        run: |
+          set -euo pipefail
+          mkdir -p apk-out
+          # Debug APKs land under each module's build/outputs/apk/debug/
+          find ext-src -path '*/build/outputs/apk/*/*.apk' -exec cp -v {} apk-out/ \;
+          echo "::group::Collected APKs"
+          ls -la apk-out
+          echo "::endgroup::"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.scaffold.outputs.package_name }}-apk
+          path: apk-out/*.apk
+          if-no-files-found: error
+          retention-days: 30

@@ -78,6 +78,23 @@ def test_scaffold_skip_analyze():
     assert "http_source" in result.output or "Skipping" in result.output
 
 
+def test_scaffold_json_output_for_ci():
+    """--json must emit a pure-JSON contract the build workflow depends on."""
+    import json
+    info = _mock_site_info(site_type=SiteType.MANGANOW, name="MangaNow")
+    with patch("main.analyze", return_value=info):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = runner.invoke(cli, ["scaffold", "https://manganow.to",
+                                         "--output", tmp, "--json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)  # must parse with no extra prose
+    assert data["lang"] == "en"
+    assert data["package_name"] == "manganow"
+    assert data["gradle_module"] == "src:en:manganow"
+    assert data["ext_id"].endswith("en.manganow")
+    assert "output_dir" in data and "warnings" in data
+
+
 def test_scaffold_cloudflare_warning():
     info = _mock_site_info(cloudflare=True)
     with patch("main.analyze", return_value=info):
@@ -193,6 +210,7 @@ if __name__ == "__main__":
         test_analyze_dead_site_exits_1,
         test_scaffold_creates_output,
         test_scaffold_skip_analyze,
+        test_scaffold_json_output_for_ci,
         test_scaffold_cloudflare_warning,
         test_check_quick_mode,
         test_check_unhealthy_exits_1,

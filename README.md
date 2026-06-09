@@ -41,7 +41,23 @@ Finding the broken selector and knowing what to replace it with currently requir
 
 ---
 
-## Quick Start (easiest)
+## Get an APK with zero setup (GitHub Actions)
+
+**The easiest path of all — no Python, no install, nothing on your computer.**
+
+1. Open this repository on GitHub and click the **Actions** tab.
+2. Select **"Build Extension APK"** in the left sidebar.
+3. Click **Run workflow**, paste the manga site URL (e.g. `https://manganow.to`), and run it.
+4. When the run finishes (a few minutes), open it and download the **APK** from the **Artifacts** section at the bottom.
+5. Install the APK on your device and add it in Mihon.
+
+That's it — the workflow fingerprints the site, generates the extension, compiles it, and hands you an installable APK.
+
+> Sites with an unknown/custom layout may need their `TODO:` selectors filled in before they compile — the run logs will say so. Known site types (MangaNow, Madara, Webtoon, etc.) build as-is.
+
+---
+
+## Quick Start (local, easiest)
 
 **You only need [Python 3.11+](https://www.python.org/downloads/) installed.** Download this project, then:
 
