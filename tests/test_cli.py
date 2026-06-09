@@ -4,9 +4,26 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import tempfile
 from unittest.mock import patch, MagicMock
+import pytest
 from click.testing import CliRunner
 from main import cli
 from src.models.site_info import SiteInfo, SiteType, HealthStatus, DetectedFeature
+from src.registry.keiyoushi import Coverage
+
+
+@pytest.fixture(autouse=True)
+def _no_network_coverage(monkeypatch):
+    """Default every test to 'not covered' so the coverage check stays offline.
+
+    Tests that exercise coverage override main.find_coverage themselves.
+    """
+    monkeypatch.setattr("main.find_coverage", lambda url: [])
+
+
+def _mock_coverage(name="Comix", version="1.4.27", lang="en"):
+    return Coverage(ext_name=name, pkg=f"eu.kanade.tachiyomi.extension.{lang}.{name.lower()}",
+                    version=version, version_code=27, nsfw=False,
+                    source_name=name, base_url="https://comix.to", lang=lang)
 
 
 def _mock_site_info(site_type=SiteType.MADARA, health=HealthStatus.ALIVE,
@@ -93,6 +110,56 @@ def test_scaffold_json_output_for_ci():
     assert data["gradle_module"] == "src:en:manganow"
     assert data["ext_id"].endswith("en.manganow")
     assert "output_dir" in data and "warnings" in data
+
+
+def test_analyze_reports_coverage_in_json():
+    import json
+    with patch("main.analyze", return_value=_mock_site_info()), \
+         patch("main.find_coverage", return_value=[_mock_coverage()]):
+        result = runner.invoke(cli, ["analyze", "https://comix.to", "--json"])
+    data = json.loads(result.output)
+    assert data["covered_by"]
+    assert data["covered_by"][0]["name"] == "Comix"
+
+
+def test_scaffold_skips_when_already_covered():
+    with patch("main.find_coverage", return_value=[_mock_coverage()]):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = runner.invoke(cli, ["scaffold", "https://comix.to", "--output", tmp])
+    assert result.exit_code == 0
+    assert "already supported by keiyoushi" in result.output.lower()
+    assert "Extension generated" not in result.output
+
+
+def test_scaffold_force_overrides_coverage():
+    info = _mock_site_info()
+    with patch("main.find_coverage", return_value=[_mock_coverage()]), \
+         patch("main.analyze", return_value=info):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = runner.invoke(cli, ["scaffold", "https://comix.to",
+                                         "--output", tmp, "--force"])
+    assert result.exit_code == 0
+    assert "Extension generated" in result.output
+
+
+def test_scaffold_json_skip_payload_when_covered():
+    import json
+    with patch("main.find_coverage", return_value=[_mock_coverage()]):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = runner.invoke(cli, ["scaffold", "https://comix.to",
+                                         "--output", tmp, "--json"])
+    data = json.loads(result.output)
+    assert data["skipped"] is True
+    assert data["reason"] == "already_covered"
+
+
+def test_wizard_warns_when_covered_and_defaults_to_no():
+    with patch("main.analyze", return_value=_mock_site_info()), \
+         patch("main.find_coverage", return_value=[_mock_coverage()]):
+        # Press Enter at the generate prompt -> default (No) because covered.
+        result = runner.invoke(cli, ["wizard"], input="comix.to\n\n")
+    assert "already supported by keiyoushi" in result.output.lower()
+    assert "No project generated" in result.output
 
 
 def test_scaffold_cloudflare_warning():
@@ -211,6 +278,11 @@ if __name__ == "__main__":
         test_scaffold_creates_output,
         test_scaffold_skip_analyze,
         test_scaffold_json_output_for_ci,
+        test_analyze_reports_coverage_in_json,
+        test_scaffold_skips_when_already_covered,
+        test_scaffold_force_overrides_coverage,
+        test_scaffold_json_skip_payload_when_covered,
+        test_wizard_warns_when_covered_and_defaults_to_no,
         test_scaffold_cloudflare_warning,
         test_check_quick_mode,
         test_check_unhealthy_exits_1,

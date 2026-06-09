@@ -4,8 +4,11 @@ Given a SiteInfo (from the analyzer), generates a complete Mihon extension
 directory tree that can be dropped into the mihon-extensions repository.
 """
 
+import hashlib
 import re
+import struct
 import textwrap
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -14,6 +17,9 @@ from jinja2 import Environment, BaseLoader
 
 from src.models.site_info import SiteInfo, SiteType
 from src.templates.kotlin_templates import TEMPLATE_MAP
+
+# Launcher-icon densities required by every keiyoushi extension (px per side).
+_ICON_DENSITIES = {"mdpi": 48, "hdpi": 72, "xhdpi": 96, "xxhdpi": 144, "xxxhdpi": 192}
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -62,65 +68,59 @@ class ScaffoldResult:
 
 # ── file content generators ───────────────────────────────────────────────────
 
-def _build_gradle(ext_name: str, pkg_suffix: str, class_name: str,
+def _build_gradle(ext_name: str, class_name: str,
                   nsfw: bool, version_code: int = 1) -> str:
+    # Current keiyoushi/extensions-source format. The package id is derived from
+    # the src/<lang>/<name>/ path, so no pkgNameSuffix is needed, and the legacy
+    # plugin generates the AndroidManifest from extClass/isNsfw.
+    safe_name = ext_name.replace("'", "")
     return textwrap.dedent(f"""\
         ext {{
-            extName = '{ext_name}'
-            pkgNameSuffix = '{pkg_suffix}'
+            extName = '{safe_name}'
             extClass = '.{class_name}'
             extVersionCode = {version_code}
             isNsfw = {str(nsfw).lower()}
         }}
 
-        apply from: "$rootDir/common.gradle"
+        apply plugin: "kei.plugins.extension.legacy"
     """)
 
 
-def _android_manifest(ext_id: str, site_name: str, base_url: str) -> str:
-    domain = re.sub(r"https?://", "", base_url).rstrip("/")
-    return textwrap.dedent(f"""\
-        <?xml version="1.0" encoding="utf-8"?>
-        <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+def _solid_png(size: int, rgba: tuple[int, int, int, int]) -> bytes:
+    """Encode a solid-colour RGBA PNG of the given side length (no external deps)."""
+    row = bytes(rgba) * size
+    raw = bytearray()
+    for _ in range(size):
+        raw.append(0)          # PNG filter type 0 (None) per scanline
+        raw += row
 
-            <application>
-                <meta-data
-                    android:name="app.mihon.extension"
-                    android:value="true" />
-                <meta-data
-                    android:name="app.mihon.extension.version"
-                    android:value="v1" />
-                <!-- Source name shown in Mihon -->
-                <meta-data
-                    android:name="app.mihon.extension.name"
-                    android:value="{site_name}" />
-                <!-- Package ID — must be unique across all extensions -->
-                <meta-data
-                    android:name="app.mihon.extension.id"
-                    android:value="{ext_id}" />
-                <!-- Source website domain for network-security-config -->
-                <meta-data
-                    android:name="app.mihon.extension.domain"
-                    android:value="{domain}" />
-            </application>
+    def _chunk(typ: bytes, data: bytes) -> bytes:
+        return (struct.pack(">I", len(data)) + typ + data
+                + struct.pack(">I", zlib.crc32(typ + data) & 0xFFFFFFFF))
 
-        </manifest>
-    """)
+    return (b"\x89PNG\r\n\x1a\n"
+            + _chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
+            + _chunk(b"IDAT", zlib.compress(bytes(raw), 9))
+            + _chunk(b"IEND", b""))
 
 
-def _network_security_config(base_url: str) -> Optional[str]:
-    """Only needed for HTTP (non-HTTPS) sources."""
-    if base_url.startswith("http://"):
-        domain = re.sub(r"http://", "", base_url).rstrip("/")
-        return textwrap.dedent(f"""\
-            <?xml version="1.0" encoding="utf-8"?>
-            <network-security-config>
-                <domain-config cleartextTrafficPermitted="true">
-                    <domain includeSubdomains="true">{domain}</domain>
-                </domain-config>
-            </network-security-config>
-        """)
-    return None
+def _icon_color(seed: str) -> tuple[int, int, int, int]:
+    """Deterministic, reasonably bright colour derived from the source name."""
+    h = hashlib.sha1(seed.encode("utf-8")).digest()
+    return (80 + h[0] % 150, 80 + h[1] % 150, 80 + h[2] % 150, 255)
+
+
+def _write_icons(res_root: Path, seed: str) -> list[Path]:
+    """Write placeholder ic_launcher.png at all required densities."""
+    color = _icon_color(seed)
+    created: list[Path] = []
+    for density, size in _ICON_DENSITIES.items():
+        d = res_root / f"mipmap-{density}"
+        d.mkdir(parents=True, exist_ok=True)
+        path = d / "ic_launcher.png"
+        path.write_bytes(_solid_png(size, color))
+        created.append(path)
+    return created
 
 
 def _setup_instructions(site_info: SiteInfo, class_name: str, pkg_suffix: str,
@@ -212,39 +212,31 @@ def scaffold(
     base_url = (site_info.base_url or site_info.url).rstrip("/")
     template_key = site_info.recommended_template or "http_source"
 
-    # Directory layout matching mihon-extensions repo structure
+    # Directory layout matching an individual keiyoushi extension folder.
     output_dir = Path(output_root) / f"{lang}.{package_name}"
     kt_dir = output_dir / "src" / "eu" / "kanade" / "tachiyomi" / "extension" / lang / package_name
-    res_dir = output_dir / "res" / "xml"
+    res_dir = output_dir / "res"
 
-    for d in [kt_dir, res_dir]:
-        d.mkdir(parents=True, exist_ok=True)
+    kt_dir.mkdir(parents=True, exist_ok=True)
 
     files_created: list[Path] = []
 
-    # ── build.gradle ────────────────────���─────────────────────────────────
+    # ── build.gradle (keiyoushi legacy-plugin format) ──────────────────────
     gradle_path = output_dir / "build.gradle"
     gradle_path.write_text(
-        _build_gradle(site_name, pkg_suffix, class_name, nsfw, version_code),
+        _build_gradle(site_name, class_name, nsfw, version_code),
         encoding="utf-8",
     )
     files_created.append(gradle_path)
 
-    # ── AndroidManifest.xml ───────────────────────────────────────────────
-    manifest_path = output_dir / "AndroidManifest.xml"
-    manifest_path.write_text(
-        _android_manifest(ext_id, site_name, base_url),
-        encoding="utf-8",
-    )
-    files_created.append(manifest_path)
+    # ── launcher icons (required; the build links @mipmap/ic_launcher) ─────
+    files_created.extend(_write_icons(res_dir, seed=package_name))
 
-    # ── network_security_config.xml (HTTP only) ───────────────────────────
-    nsc = _network_security_config(base_url)
-    if nsc:
-        nsc_path = res_dir / "network_security_config.xml"
-        nsc_path.write_text(nsc, encoding="utf-8")
-        files_created.append(nsc_path)
-        warnings.append("HTTP (non-HTTPS) site — network_security_config.xml created")
+    if base_url.startswith("http://"):
+        warnings.append(
+            "HTTP (non-HTTPS) site — add a network_security_config and reference it "
+            "from the source, or the app will block cleartext traffic."
+        )
 
     # ── Kotlin source ─────────────────────────────────────────────────────
     template_str = TEMPLATE_MAP.get(template_key, TEMPLATE_MAP["http_source"])

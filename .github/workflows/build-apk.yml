@@ -30,6 +30,11 @@ on:
         required: false
         type: string
         default: ""
+      force:
+        description: "Build even if keiyoushi already supports this site"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -59,20 +64,35 @@ jobs:
         run: |
           set -euo pipefail
           ARGS=(scaffold "${{ inputs.url }}" --output generated --json)
-          [ -n "${{ inputs.lang }}" ]       && ARGS+=(--lang "${{ inputs.lang }}")
-          [ "${{ inputs.nsfw }}" = "true" ] && ARGS+=(--nsfw)
-          [ -n "${{ inputs.class_name }}" ] && ARGS+=(--class-name "${{ inputs.class_name }}")
+          [ -n "${{ inputs.lang }}" ]        && ARGS+=(--lang "${{ inputs.lang }}")
+          [ "${{ inputs.nsfw }}" = "true" ]  && ARGS+=(--nsfw)
+          [ -n "${{ inputs.class_name }}" ]  && ARGS+=(--class-name "${{ inputs.class_name }}")
+          [ "${{ inputs.force }}" = "true" ] && ARGS+=(--force)
 
           python main.py "${ARGS[@]}" | tee scaffold.json
           echo "----"
-          # Promote the JSON fields we need into step outputs.
+          # Promote the JSON fields we need into step outputs. If the site is
+          # already supported by keiyoushi, mark the run skipped and stop early.
           python - <<'PY' >> "$GITHUB_OUTPUT"
           import json
           d = json.load(open("scaffold.json"))
-          for k in ("output_dir", "lang", "package_name", "class_name",
-                    "ext_id", "gradle_module"):
-              print(f"{k}={d[k]}")
+          if d.get("skipped"):
+              print("skipped=true")
+              names = ", ".join(c["name"] + " v" + c["version"] for c in d.get("covered_by", []))
+              print(f"covered={names}")
+          else:
+              print("skipped=false")
+              for k in ("output_dir", "lang", "package_name", "class_name",
+                        "ext_id", "gradle_module"):
+                  print(f"{k}={d[k]}")
           PY
+
+      - name: Already supported — nothing to build
+        if: steps.scaffold.outputs.skipped == 'true'
+        run: |
+          echo "::notice::keiyoushi already supports this site (${{ steps.scaffold.outputs.covered }})."
+          echo "Install it in Mihon via the keiyoushi extension repo instead of building."
+          echo "Re-run with 'force: true' to scaffold and build anyway."
 
       - name: Show scaffold warnings
         if: always()
@@ -97,18 +117,23 @@ jobs:
           PY
 
       - name: Set up Java
+        if: steps.scaffold.outputs.skipped != 'true'
         uses: actions/setup-java@v4
         with:
           java-version: "17"
           distribution: temurin
 
       - name: Clone extensions-source build
+        if: steps.scaffold.outputs.skipped != 'true'
         run: git clone --depth 1 "$EXTENSIONS_SOURCE_REPO" ext-src
 
       - name: Place generated extension into the build
+        if: steps.scaffold.outputs.skipped != 'true'
         run: |
           set -euo pipefail
           DEST="ext-src/src/${{ steps.scaffold.outputs.lang }}/${{ steps.scaffold.outputs.package_name }}"
+          # Replace any stub the repo already ships for this folder with ours.
+          rm -rf "$DEST"
           mkdir -p "$DEST"
           cp -r "${{ steps.scaffold.outputs.output_dir }}/." "$DEST/"
           echo "Extension placed at: $DEST"
@@ -117,14 +142,17 @@ jobs:
           echo "::endgroup::"
 
       - name: Set up Gradle
+        if: steps.scaffold.outputs.skipped != 'true'
         uses: gradle/actions/setup-gradle@v4
 
       - name: Build APK (assembleDebug)
+        if: steps.scaffold.outputs.skipped != 'true'
         working-directory: ext-src
         run: ./gradlew ${{ steps.scaffold.outputs.gradle_module }}:assembleDebug --stacktrace
 
       - name: Collect built APK(s)
         id: collect
+        if: steps.scaffold.outputs.skipped != 'true'
         run: |
           set -euo pipefail
           mkdir -p apk-out
@@ -135,6 +163,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Upload APK artifact
+        if: steps.scaffold.outputs.skipped != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.scaffold.outputs.package_name }}-apk

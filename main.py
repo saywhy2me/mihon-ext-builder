@@ -23,7 +23,18 @@ for _stream in (sys.stdout, sys.stderr):
 from src.analyzer.site_analyzer import analyze
 from src.checker.health_checker import check_extension, quick_check
 from src.models.site_info import HealthStatus, SiteType
+from src.registry.keiyoushi import IndexUnavailable, find_coverage
 from src.scaffolder.scaffolder import scaffold
+
+REPO_INDEX_URL = "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json"
+
+
+def _coverage_or_none(url: str):
+    """Look up existing keiyoushi coverage; return [] if uncovered, None if offline."""
+    try:
+        return find_coverage(url)
+    except IndexUnavailable:
+        return None
 
 
 @click.group(invoke_without_command=True)
@@ -49,6 +60,8 @@ def analyze_cmd(url: str, as_json: bool):
         click.echo(f"Analyzing: {url}")
     info = analyze(url)
 
+    coverage = _coverage_or_none(url)
+
     if as_json:
         data = {
             "url": info.url,
@@ -62,6 +75,10 @@ def analyze_cmd(url: str, as_json: bool):
             "http_status": info.http_status,
             "response_ms": info.response_time_ms,
             "notes": info.notes,
+            "covered_by": [
+                {"name": c.source_name, "version": c.version, "lang": c.lang, "pkg": c.pkg}
+                for c in (coverage or [])
+            ],
         }
         click.echo(json.dumps(data, indent=2))
         return
@@ -92,6 +109,17 @@ def analyze_cmd(url: str, as_json: bool):
         for note in info.notes:
             click.echo(f"    - {note}")
 
+    click.echo()
+    if coverage:
+        click.secho("  Already supported by keiyoushi — no need to build:", fg="green", bold=True)
+        for c in coverage:
+            click.echo(f"    {c.source_name} v{c.version} ({c.lang})")
+        click.echo("    Install it in Mihon via the keiyoushi extension repo.")
+    elif coverage is None:
+        click.secho("  Coverage check skipped (couldn't reach the keiyoushi index).", fg="yellow")
+    else:
+        click.secho("  Not in keiyoushi — a good candidate to generate.", fg="cyan")
+
     if info.health == HealthStatus.DEAD:
         sys.exit(1)
 
@@ -114,8 +142,31 @@ def analyze_cmd(url: str, as_json: bool):
               help="Skip live analysis; use http_source template (faster, offline).")
 @click.option("--json", "as_json", is_flag=True, default=False,
               help="Emit only a machine-readable JSON summary (for CI / scripting).")
-def scaffold_cmd(url, output, lang, class_name, nsfw, version_code, skip_analyze, as_json):
+@click.option("--force", is_flag=True, default=False,
+              help="Generate even if the site is already supported by keiyoushi.")
+def scaffold_cmd(url, output, lang, class_name, nsfw, version_code, skip_analyze, as_json, force):
     """Analyze a URL and generate a complete Kotlin/Gradle Mihon extension project."""
+    # Don't waste effort on sites keiyoushi already supports (far better than a stub).
+    coverage = _coverage_or_none(url)
+    if coverage and not force:
+        if as_json:
+            click.echo(json.dumps({
+                "skipped": True,
+                "reason": "already_covered",
+                "covered_by": [
+                    {"name": c.source_name, "version": c.version, "lang": c.lang, "pkg": c.pkg}
+                    for c in coverage
+                ],
+            }, indent=2))
+        else:
+            click.secho("This site is already supported by keiyoushi — not generating.",
+                        fg="yellow", bold=True)
+            for c in coverage:
+                click.echo(f"  {c.source_name} v{c.version} ({c.lang})")
+            click.echo("  Install it in Mihon via the keiyoushi extension repo, or pass "
+                       "--force to scaffold anyway.")
+        return
+
     if skip_analyze:
         from src.models.site_info import SiteInfo as _SI
         info = _SI(url=url, site_type=SiteType.UNKNOWN, health=HealthStatus.ALIVE,
@@ -284,9 +335,25 @@ def wizard_cmd():
             click.echo("  Cancelled.")
             return
 
+    # 1b. Is it already supported by keiyoushi? ----------------------------------
+    coverage = _coverage_or_none(url)
+    generate_default = True
+    if coverage:
+        click.secho("  Good news — this site is already supported by keiyoushi:",
+                    fg="green", bold=True)
+        for c in coverage:
+            click.echo(f"    {c.source_name} v{c.version} ({c.lang})")
+        click.echo()
+        click.echo("  Easiest path: install it in Mihon instead of building. Add this repo")
+        click.echo("  under Settings -> Browse -> Extension repos:")
+        click.secho(f"    {REPO_INDEX_URL}", fg="cyan")
+        click.echo()
+        generate_default = False  # default to NOT generating a redundant stub
+
     # 2. Generate the extension project ------------------------------------------
-    if not click.confirm(click.style("  Generate the extension project now?", bold=True),
-                         default=True):
+    prompt = ("  Generate a (likely redundant) extension anyway?" if coverage
+              else "  Generate the extension project now?")
+    if not click.confirm(click.style(prompt, bold=True), default=generate_default):
         click.echo("  No project generated. You can re-run the wizard any time.")
         return
 
